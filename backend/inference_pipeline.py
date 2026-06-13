@@ -27,6 +27,21 @@ class TwoStagePPEPipeline:
             self.fallback = True
 
         self.conf_threshold = conf_threshold
+        # Load config thresholds
+        config_path = os.path.join(os.path.dirname(__file__), 'inference_config.json')
+        self.person_conf_threshold = conf_threshold
+        self.ppe_conf_threshold = conf_threshold
+        if os.path.exists(config_path):
+            try:
+                import json
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                self.person_conf_threshold = config.get("person_conf_threshold", conf_threshold)
+                self.ppe_conf_threshold = config.get("ppe_conf_threshold", conf_threshold)
+                print(f"[Pipeline] Loaded thresholds from {config_path}: Person={self.person_conf_threshold}, PPE={self.ppe_conf_threshold}")
+            except Exception as e:
+                print(f"[Pipeline] Error loading config: {e}. Using defaults.")
+
         # Class names for Stage 2
         # Index: 0 -> helmet, 1 -> head (no helmet), 2 -> vest
         self.class_names = ['helmet', 'head', 'vest']
@@ -47,7 +62,7 @@ class TwoStagePPEPipeline:
         s1_results = self.stage1_model.predict(
             source=frame,
             classes=[0], # Filter to only person class
-            conf=self.conf_threshold,
+            conf=self.person_conf_threshold,
             device=self.device,
             verbose=False
         )[0]
@@ -81,7 +96,7 @@ class TwoStagePPEPipeline:
             if not self.fallback:
                 s2_results = self.stage2_model.predict(
                     source=person_crop,
-                    conf=self.conf_threshold,
+                    conf=self.ppe_conf_threshold,
                     device=self.device,
                     verbose=False
                 )[0]

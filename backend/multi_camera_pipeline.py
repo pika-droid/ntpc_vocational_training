@@ -27,8 +27,22 @@ class MultiCameraPPEPipeline:
             print(f"[MultiCameraPipeline] Falling back to pretrained Stage 1 model '{stage1_path}' for testing pipeline.")
             self.stage2_model = YOLO(stage1_path).to(self.device)
             self.fallback = True
-            
         self.conf_threshold = conf_threshold
+        # Load config thresholds
+        config_path = os.path.join(os.path.dirname(__file__), 'inference_config.json')
+        self.person_conf_threshold = conf_threshold
+        self.ppe_conf_threshold = conf_threshold
+        if os.path.exists(config_path):
+            try:
+                import json
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                self.person_conf_threshold = config.get("person_conf_threshold", conf_threshold)
+                self.ppe_conf_threshold = config.get("ppe_conf_threshold", conf_threshold)
+                print(f"[MultiCameraPipeline] Loaded thresholds: Person={self.person_conf_threshold}, PPE={self.ppe_conf_threshold}")
+            except Exception as e:
+                print(f"[MultiCameraPipeline] Error loading config: {e}. Using defaults.")
+
         self.camera_configs = {}
         
         self.lock = threading.Lock()
@@ -145,7 +159,7 @@ class MultiCameraPPEPipeline:
         s1_results = self.stage1_models[cam_id].track(
             source=frame,
             classes=[0],
-            conf=self.conf_threshold,
+            conf=self.person_conf_threshold,
             device=self.device,
             verbose=False,
             persist=True
@@ -184,7 +198,7 @@ class MultiCameraPPEPipeline:
                 # Stage 2: PPE Detection on crop
                 s2_results = self.stage2_model.predict(
                     source=person_crop,
-                    conf=self.conf_threshold,
+                    conf=self.ppe_conf_threshold,
                     device=self.device,
                     verbose=False
                 )[0]
