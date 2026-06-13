@@ -26,14 +26,17 @@ def create_dummy_video(filename, width=640, height=480, fps=15, duration_sec=3):
 def test_pipeline():
     video1_path = "backend/test_video_1.mp4"
     video2_path = "backend/test_video_2.mp4"
+    video3_path = "backend/test_video_3.mp4"
     
     # Create the temporary videos
     create_dummy_video(video1_path)
     create_dummy_video(video2_path)
+    create_dummy_video(video3_path)
     
     camera_configs = {
         "cam_1": {"rtsp_url": video1_path, "zone_name": "Main Gate Entrance"},
-        "cam_2": {"rtsp_url": video2_path, "zone_name": "Vehicle Gate Exit"}
+        "cam_2": {"rtsp_url": video2_path, "zone_name": "Vehicle Gate Exit"},
+        "cam_3": {"rtsp_url": video3_path, "zone_name": "Loading Dock Area"}
     }
     
     print("\nInitializing Multi-Camera Pipeline...")
@@ -69,6 +72,8 @@ def test_pipeline():
             os.remove(video1_path)
         if os.path.exists(video2_path):
             os.remove(video2_path)
+        if os.path.exists(video3_path):
+            os.remove(video3_path)
             
     print("\nPipeline stopped successfully.")
     

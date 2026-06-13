@@ -2,6 +2,7 @@
 import cv2
 import time
 import threading
+import os
 
 class CameraCapture:
     def __init__(self, camera_id, rtsp_url, zone_name="default_zone"):
@@ -54,13 +55,33 @@ class CameraCapture:
 
             ret, frame = cap.read()
             if not ret:
-                print(f"[Camera {self.camera_id}] Stream disconnected or frame read failed. Retrying...")
-                with self.lock:
-                    self.is_online = False
-                cap.release()
-                cap = None
-                time.sleep(5.0)
-                continue
+                if isinstance(self.source, str) and not self.source.startswith("rtsp") and os.path.exists(self.source):
+                    # Loop video files
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ret, frame = cap.read()
+                    if not ret:
+                        print(f"[Camera {self.camera_id}] Failed to loop video file. Reconnecting...")
+                        with self.lock:
+                            self.is_online = False
+                        cap.release()
+                        cap = None
+                        time.sleep(5.0)
+                        continue
+                else:
+                    print(f"[Camera {self.camera_id}] Stream disconnected or frame read failed. Retrying...")
+                    with self.lock:
+                        self.is_online = False
+                    cap.release()
+                    cap = None
+                    time.sleep(5.0)
+                    continue
+
+            # Pace local video files to simulate real-time camera feed
+            if isinstance(self.source, str) and not self.source.startswith("rtsp"):
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                if fps <= 0 or fps > 100:
+                    fps = 15.0
+                time.sleep(1.0 / fps)
 
             # Frame successfully read, update thread-safe variables
             with self.lock:
