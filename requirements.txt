@@ -1,0 +1,10 @@
+ultralytics
+fastapi
+uvicorn
+opencv-python
+psycopg2-binary
+python-dotenv
+ipykernel
+pandas
+requests
+supabase
