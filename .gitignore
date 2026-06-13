@@ -53,3 +53,11 @@ runs/
 # Binaries and third-party tools
 bin/
 
+# Local screenshots and database
+backend/static/screenshots/
+backend/violations.db
+
+# Notebook raw dataset and training runs
+notebooks/raw_dataset/
+notebooks/ntpc_ppe/
+
