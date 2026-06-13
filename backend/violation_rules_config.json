@@ -1,0 +1,5 @@
+{
+    "violation_window_seconds": 2.0,
+    "track_loss_timeout_seconds": 1.0,
+    "alert_cooldown_seconds": 30.0
+}
