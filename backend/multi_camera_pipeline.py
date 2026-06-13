@@ -3,6 +3,7 @@ import time
 import os
 import cv2
 import threading
+import queue
 from ultralytics import YOLO
 import torch
 from camera_capture import CameraCapture
@@ -12,6 +13,9 @@ class MultiCameraPPEPipeline:
     def __init__(self, camera_configs, stage1_path='yolov11n.pt', stage2_path='models/ppe_crop_detector.pt', conf_threshold=0.50):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f"[MultiCameraPipeline] Running on device: {self.device}")
+        
+        self.stage1_path = stage1_path
+        self.stage2_path = stage2_path
         
         # Load Stage 2 model (stateless)
         if os.path.exists(stage2_path):
@@ -25,7 +29,10 @@ class MultiCameraPPEPipeline:
             self.fallback = True
             
         self.conf_threshold = conf_threshold
-        self.camera_configs = camera_configs
+        self.camera_configs = {}
+        
+        self.lock = threading.Lock()
+        self.event_queue = queue.Queue()
         
         # Instantiate separate Stage 1 YOLO models for tracking per camera
         self.stage1_models = {}
@@ -34,14 +41,9 @@ class MultiCameraPPEPipeline:
         self.last_processed_ids = {}
         self.latest_processed_frames = {}
         
+        # Initialize starting cameras
         for cam_id, config in camera_configs.items():
-            rtsp_url = config.get('rtsp_url')
-            zone_name = config.get('zone_name', 'default_zone')
-            
-            self.captures[cam_id] = CameraCapture(cam_id, rtsp_url, zone_name)
-            self.stage1_models[cam_id] = YOLO(stage1_path).to(self.device)
-            self.last_processed_ids[cam_id] = -1
-            self.latest_processed_frames[cam_id] = None
+            self.add_camera(cam_id, config.get('rtsp_url'), config.get('zone_name', 'default_zone'))
             
         # State machine
         self.vsm = ViolationStateMachine()
@@ -53,6 +55,41 @@ class MultiCameraPPEPipeline:
         self.stopped = False
         self.loop_thread = None
 
+    def add_camera(self, cam_id, rtsp_url, zone_name):
+        with self.lock:
+            if cam_id in self.camera_configs:
+                print(f"[MultiCameraPipeline] Camera '{cam_id}' already exists. Updating configuration...")
+                # Stop existing camera first
+                cap = self.captures.get(cam_id)
+                if cap:
+                    cap.stop()
+            
+            print(f"[MultiCameraPipeline] Adding camera '{cam_id}' (Zone: {zone_name}, Source: {rtsp_url})")
+            self.camera_configs[cam_id] = {
+                "rtsp_url": rtsp_url,
+                "zone_name": zone_name
+            }
+            self.captures[cam_id] = CameraCapture(cam_id, rtsp_url, zone_name)
+            self.stage1_models[cam_id] = YOLO(self.stage1_path).to(self.device)
+            self.last_processed_ids[cam_id] = -1
+            self.latest_processed_frames[cam_id] = None
+
+    def remove_camera(self, cam_id):
+        with self.lock:
+            if cam_id not in self.camera_configs:
+                print(f"[MultiCameraPipeline] Camera '{cam_id}' not found for removal.")
+                return
+                
+            print(f"[MultiCameraPipeline] Removing camera '{cam_id}'")
+            cap = self.captures.pop(cam_id, None)
+            if cap:
+                cap.stop()
+                
+            self.camera_configs.pop(cam_id, None)
+            self.stage1_models.pop(cam_id, None)
+            self.last_processed_ids.pop(cam_id, None)
+            self.latest_processed_frames.pop(cam_id, None)
+
     def start(self):
         self.stopped = False
         self.loop_thread = threading.Thread(target=self._processing_loop, name="InferenceLoop", daemon=True)
@@ -62,8 +99,9 @@ class MultiCameraPPEPipeline:
         self.stopped = True
         if self.loop_thread is not None:
             self.loop_thread.join(timeout=2.0)
-        for cap in self.captures.values():
-            cap.stop()
+        with self.lock:
+            for cap in self.captures.values():
+                cap.stop()
 
     def _processing_loop(self):
         print("[MultiCameraPipeline] Inference loop started.")
@@ -71,16 +109,25 @@ class MultiCameraPPEPipeline:
             processed_any = False
             current_time = time.time()
             
-            for cam_id in self.camera_configs.keys():
-                cap = self.captures[cam_id]
+            with self.lock:
+                active_cam_ids = list(self.camera_configs.keys())
+                
+            for cam_id in active_cam_ids:
+                with self.lock:
+                    cap = self.captures.get(cam_id)
+                
+                if cap is None:
+                    continue
+                    
                 frame, frame_id, is_online = cap.get_latest_frame()
                 
                 # Only process if camera is online, frame exists, and it is a new frame
-                if is_online and frame is not None and frame_id > self.last_processed_ids[cam_id]:
+                if is_online and frame is not None and frame_id > self.last_processed_ids.get(cam_id, -1):
                     # Process frame
                     annotated_frame = self.process_frame(cam_id, frame, current_time)
-                    self.latest_processed_frames[cam_id] = annotated_frame
-                    self.last_processed_ids[cam_id] = frame_id
+                    with self.lock:
+                        self.latest_processed_frames[cam_id] = annotated_frame
+                        self.last_processed_ids[cam_id] = frame_id
                     processed_any = True
                     
                     # Cleanup old tracks for this camera
@@ -190,7 +237,22 @@ class MultiCameraPPEPipeline:
                 violation_event["box"] = [px1, py1, px2, py2]
                 violation_event["conf"] = s2_conf
                 self.confirmed_violations.append(violation_event)
-                print(f"\n[ALERT] Confirmed Violation on Cam '{cam_id}' (Zone: {self.camera_configs[cam_id].get('zone_name')})! "
+                
+                with self.lock:
+                    zone_name = self.camera_configs[cam_id].get("zone_name", "unknown") if cam_id in self.camera_configs else "unknown"
+                
+                # Push to background event queue
+                event = {
+                    "camera_id": cam_id,
+                    "zone": zone_name,
+                    "timestamp": current_time,
+                    "violation_type": violation_type,
+                    "confidence": float(s2_conf),
+                    "frame": annotated_frame.copy()
+                }
+                self.event_queue.put(event)
+                
+                print(f"\n[ALERT] Confirmed Violation on Cam '{cam_id}' (Zone: {zone_name})! "
                       f"Track {track_id} is {status}. Confidence: {s2_conf:.2f}")
 
             # Annotate the original frame
