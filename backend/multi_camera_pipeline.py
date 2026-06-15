@@ -68,6 +68,7 @@ class MultiCameraPPEPipeline:
         # Loop control
         self.stopped = False
         self.loop_thread = None
+        self.track_history = {}
 
     def add_camera(self, cam_id, rtsp_url, zone_name):
         with self.lock:
@@ -147,6 +148,13 @@ class MultiCameraPPEPipeline:
                     # Cleanup old tracks for this camera
                     self.vsm.cleanup_tracks(cam_id, current_time)
                     
+                    # Sync track_history with state machine active tracks
+                    if cam_id in self.track_history and cam_id in self.vsm.track_states:
+                        active_tracks = set(self.vsm.track_states[cam_id].keys())
+                        for tid in list(self.track_history[cam_id].keys()):
+                            if tid not in active_tracks:
+                                del self.track_history[cam_id][tid]
+                    
             if not processed_any:
                 time.sleep(0.005) # Yield CPU if no new frames are ready
                 
@@ -186,8 +194,19 @@ class MultiCameraPPEPipeline:
             p_height = py2 - py1
             if p_width <= 0 or p_height <= 0: continue
             
-            # Crop the person
-            person_crop = frame[py1:py2, px1:px2]
+            # Apply padding margin (10% width, 15% height) to avoid clipping helmets/vests
+            pad_w = int(p_width * 0.10)
+            pad_h = int(p_height * 0.15)
+            
+            pad_x1 = max(0, px1 - pad_w)
+            pad_y1 = max(0, py1 - pad_h)
+            pad_x2 = min(w_frame, px2 + pad_w)
+            pad_y2 = min(h_frame, py2 + pad_h)
+            
+            if (pad_x2 - pad_x1) <= 0 or (pad_y2 - pad_y1) <= 0: continue
+            
+            # Crop the person with padding
+            person_crop = frame[pad_y1:pad_y2, pad_x1:pad_x2]
             
             has_helmet = False
             has_head = False
@@ -229,22 +248,46 @@ class MultiCameraPPEPipeline:
             if not is_compliant:
                 if not helmet_ok and not vest_ok:
                     violation_type = "both_missing"
-                    status = "HELMET & VEST MISSING"
-                    color = (0, 0, 255) # Red
                 elif not helmet_ok:
                     violation_type = "helmet_missing"
+                else:
+                    violation_type = "vest_missing"
+                    
+            # Temporal Smoothing (majority voting over a 5-frame window)
+            if cam_id not in self.track_history:
+                self.track_history[cam_id] = {}
+            if track_id not in self.track_history[cam_id]:
+                self.track_history[cam_id][track_id] = []
+                
+            self.track_history[cam_id][track_id].append((is_compliant, violation_type))
+            if len(self.track_history[cam_id][track_id]) > 5:
+                self.track_history[cam_id][track_id].pop(0)
+                
+            history = self.track_history[cam_id][track_id]
+            non_compliant_frames = [h for h in history if not h[0]]
+            is_compliant_smoothed = len(non_compliant_frames) <= (len(history) / 2.0)
+            
+            violation_type_smoothed = None
+            if not is_compliant_smoothed:
+                from collections import Counter
+                types = [h[1] for h in history if h[1] is not None]
+                violation_type_smoothed = Counter(types).most_common(1)[0][0] if types else violation_type
+                
+                if violation_type_smoothed == "both_missing":
+                    status = "HELMET & VEST MISSING"
+                    color = (0, 0, 255) # Red
+                elif violation_type_smoothed == "helmet_missing":
                     status = "HELMET MISSING"
                     color = (0, 165, 255) # Orange
                 else:
-                    violation_type = "vest_missing"
                     status = "VEST MISSING"
                     color = (0, 255, 255) # Yellow
             else:
                 status = "COMPLIANT"
                 color = (0, 255, 0) # Green
                 
-            # Update compliance state machine for this track
-            violation_event = self.vsm.update_track(cam_id, track_id, is_compliant, violation_type, current_time)
+            # Update compliance state machine for this track with smoothed results
+            violation_event = self.vsm.update_track(cam_id, track_id, is_compliant_smoothed, violation_type_smoothed, current_time)
             
             if violation_event is not None:
                 # Attach additional details like crop boundary and conf

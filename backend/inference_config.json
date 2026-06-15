@@ -1,4 +1,4 @@
 {
   "person_conf_threshold": 0.50,
-  "ppe_conf_threshold": 0.50
+  "ppe_conf_threshold": 0.25
 }
