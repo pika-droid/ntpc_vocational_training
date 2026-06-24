@@ -47,7 +47,7 @@ def run_benchmark():
     print("\nInitializing Pipeline on device:", "CUDA" if torch.cuda.is_available() else "CPU")
     pipeline = MultiCameraPPEPipeline(
         camera_configs=camera_configs,
-        stage1_path='yolov11n.pt',
+        stage1_path='yolo11n.pt',
         conf_threshold=0.30  # lower threshold to guarantee detection on mock frames
     )
     

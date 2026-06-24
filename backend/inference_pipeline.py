@@ -1,14 +1,21 @@
 # backend/inference_pipeline.py
 import cv2
 import time
+import numpy as np
 import os
 import torch
 from ultralytics import YOLO
+try:
+    from backend.device_config import get_optimal_inference_config
+except ImportError:
+    from device_config import get_optimal_inference_config
 
 class TwoStagePPEPipeline:
-    def __init__(self, stage1_path='yolov11n.pt', stage2_path='models/ppe_crop_detector.pt', conf_threshold=0.50):
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        print(f"Initializing two-stage pipeline on device: {self.device}")
+    def __init__(self, stage1_path='yolo11n.pt', stage2_path='models/ppe_crop_detector.pt', conf_threshold=0.50):
+        self.hw_config = get_optimal_inference_config()
+        self.device = self.hw_config['device']
+        self.use_half = self.hw_config['half']
+        print(f"Initializing two-stage pipeline on device: {self.device} (FP16 half={self.use_half})")
         
         # Load Stage 1: Person Detector (pretrained COCO)
         print(f"Loading Stage 1 Person Detector from: {stage1_path}")
@@ -64,6 +71,7 @@ class TwoStagePPEPipeline:
             classes=[0], # Filter to only person class
             conf=self.person_conf_threshold,
             device=self.device,
+            half=self.use_half,   # Dynamically configured FP16 inference
             verbose=False
         )[0]
         
@@ -98,6 +106,7 @@ class TwoStagePPEPipeline:
                     source=person_crop,
                     conf=self.ppe_conf_threshold,
                     device=self.device,
+                    half=self.use_half,   # Dynamically configured FP16 inference
                     verbose=False
                 )[0]
                 

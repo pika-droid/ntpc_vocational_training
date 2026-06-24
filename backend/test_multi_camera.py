@@ -42,7 +42,7 @@ def test_pipeline():
     print("\nInitializing Multi-Camera Pipeline...")
     pipeline = MultiCameraPPEPipeline(
         camera_configs=camera_configs,
-        stage1_path='yolov11n.pt',
+        stage1_path='yolo11n.pt',
         conf_threshold=0.30  # lower threshold to guarantee detection on mock frames
     )
     

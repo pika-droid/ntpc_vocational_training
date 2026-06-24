@@ -6,13 +6,19 @@ import threading
 import queue
 from ultralytics import YOLO
 import torch
+try:
+    from backend.device_config import get_optimal_inference_config
+except ImportError:
+    from device_config import get_optimal_inference_config
 from camera_capture import CameraCapture
 from violation_rules import ViolationStateMachine
 
 class MultiCameraPPEPipeline:
-    def __init__(self, camera_configs, stage1_path='yolov11n.pt', stage2_path='models/ppe_crop_detector.pt', conf_threshold=0.50):
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        print(f"[MultiCameraPipeline] Running on device: {self.device}")
+    def __init__(self, camera_configs, stage1_path='yolo11n.pt', stage2_path='models/ppe_crop_detector.pt', conf_threshold=0.50):
+        self.hw_config = get_optimal_inference_config()
+        self.device = self.hw_config['device']
+        self.use_half = self.hw_config['half']
+        print(f"[MultiCameraPipeline] Running on device: {self.device} (FP16 half={self.use_half})")
         
         self.stage1_path = stage1_path
         self.stage2_path = stage2_path
@@ -169,6 +175,7 @@ class MultiCameraPPEPipeline:
             classes=[0],
             conf=self.person_conf_threshold,
             device=self.device,
+            half=self.use_half,   # Dynamically configured FP16 inference
             verbose=False,
             persist=True
         )[0]
@@ -219,6 +226,7 @@ class MultiCameraPPEPipeline:
                     source=person_crop,
                     conf=self.ppe_conf_threshold,
                     device=self.device,
+                    half=self.use_half,   # Dynamically configured FP16 inference
                     verbose=False
                 )[0]
                 
